@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Device & Browser Fingerprinting</title>
+</head>
+<body>
+  <h1>Fingerprinting Test</h1>
+
+  <script>
+    async function getFingerprint() {
+      const fingerprint = {
+        userAgent: navigator.userAgent,
+        platform: navigator.platform,
+        language: navigator.language,
+        screenResolution: `${screen.width}x${screen.height}`,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        timezoneOffset: new Date().getTimezoneOffset(),
+        colorDepth: screen.colorDepth,
+        plugins: Array.from(navigator.plugins).map(p => p.name).join(', '),
+        fonts: await detectFonts()
+      };
+
+      console.log("Collected Fingerprint:", fingerprint);
+
+      // Generate hash
+      const hash = await hashFingerprint(JSON.stringify(fingerprint));
+      console.log("Fingerprint Hash:", hash);
+
+      // ❗SEND TO BACKEND TO CHECK SESSION
+      checkActiveSession(hash);
+    }
+
+
+    // NEW FUNCTION → CHECK IF ANOTHER DEVICE IS LOGGED IN
+    async function checkActiveSession(fingerprintHash) {
+      const userId = localStorage.getItem("userId"); // you can adjust based on your system
+
+      const response = await fetch("http://localhost:8080/check-active-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: userId,
+          fingerprintHash: fingerprintHash
+        })
+      });
+
+      const result = await response.json();
+      console.log("Session Check:", result);
+
+      // 💥 If another device has a different fingerprint
+      if (result.alreadyLoggedIn && !result.sameDevice) {
+        alert("⚠️ Warning: Your account is already logged in on another device!");
+      }
+    }
+
+
+    // Simplified font detection
+    async function detectFonts() {
+      const baseFonts = ['monospace', 'sans-serif', 'serif'];
+      const testFonts = ['Arial', 'Verdana', 'Courier New', 'Times New Roman', 'Comic Sans MS', 'Georgia'];
+      const available = [];
+
+      const testDiv = document.createElement('span');
+      testDiv.innerText = 'abcdefghiABCDEFGHI1234567890';
+      testDiv.style.position = 'absolute';
+      testDiv.style.left = '-9999px';
+      testDiv.style.fontSize = '72px';
+      document.body.appendChild(testDiv);
+
+      for (const font of testFonts) {
+        let detected = false;
+        for (const base of baseFonts) {
+          testDiv.style.fontFamily = `${font},${base}`;
+          const width = testDiv.offsetWidth;
+          testDiv.style.fontFamily = base;
+          const baseWidth = testDiv.offsetWidth;
+
+          if (width !== baseWidth) detected = true;
+        }
+        if (detected) available.push(font);
+      }
+
+      document.body.removeChild(testDiv);
+      return available.join(', ');
+    }
+
+
+    // Hash function using SubtleCrypto API
+    async function hashFingerprint(input) {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(input);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      return Array.from(new Uint8Array(hashBuffer))
+          .map(b => b.toString(16).padStart(2, '0'))
+          .join('');
+    }
+
+    // Call on page load
+    window.onload = getFingerprint;
+  </script>
+</body>
+</html>

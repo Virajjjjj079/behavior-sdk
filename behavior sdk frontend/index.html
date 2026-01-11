@@ -1,0 +1,630 @@
+<!-- <!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Risk SDK Auto Test</title>
+</head>
+<body>
+  <h1>Risk SDK Auto Test</h1>
+  
+  <textarea 
+    id="inputText" 
+    placeholder="Enter test data / notes here..."
+    rows="6"
+    cols="60"
+    style="margin-bottom:15px; display:block;"
+  ></textarea>
+
+  <pre id="output" style="background:#f0f0f0; padding:10px; border:1px solid #ccc;"></pre>
+
+  <script>
+  (function (window) {
+    const RiskSDK = {};
+    const USER_ID = 12;
+    const USER_NAME = "Rathod";
+    let behavior = {
+      keyData: [],
+      mouseData: [],
+      startTime: null,
+      lastKeyTime: null,
+      lastMove: null,
+      stopTime: null
+    };
+
+    const MAX_BEHAVIOR_DURATION = 30 * 1000; // 30 seconds
+
+    /* =========================
+       SDK INITIALIZATION
+    ========================= */
+    RiskSDK.init = function (options) {
+      if (!options.endpoints) throw new Error("Endpoints required");
+
+      RiskSDK.endpoints = {
+        fingerprint: options.endpoints.fingerprint,
+        behavior: options.endpoints.behavior,
+        location: options.endpoints.location
+      };
+
+      // Start behavior collection automatically
+      RiskSDK.startBehavior();
+    };
+
+    /* =========================
+       BEHAVIOR COLLECTION
+    ========================= */
+    RiskSDK.startBehavior = function () {
+      behavior.startTime = Date.now();
+      behavior.stopTime = behavior.startTime + MAX_BEHAVIOR_DURATION;
+
+      document.addEventListener("keydown", onKeyDown);
+      document.addEventListener("keyup", onKeyUp);
+      document.addEventListener("mousemove", onMouseMove);
+
+      setTimeout(stopBehaviorAndSend, MAX_BEHAVIOR_DURATION);
+      const output = document.getElementById("output");
+      output.innerText = "Behavior collection started for 30 seconds...";
+    };
+
+    function stopBehaviorAndSend() {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keyup", onKeyUp);
+      document.removeEventListener("mousemove", onMouseMove);
+
+      collectAndSendAll();
+    }
+
+    function onKeyDown(e) {
+      const now = Date.now();
+      if (behavior.lastKeyTime) {
+        behavior.keyData.push({ flightTime: now - behavior.lastKeyTime, holdTime: null, timestamp: now });
+      }
+      behavior.lastKeyTime = now;
+    }
+
+    function onKeyUp() {
+      const last = behavior.keyData[behavior.keyData.length - 1];
+      if (last && last.holdTime === null) last.holdTime = Date.now() - behavior.lastKeyTime;
+    }
+
+    function onMouseMove(e) {
+      const now = Date.now();
+      if (behavior.lastMove) {
+        const dx = e.pageX - behavior.lastMove.x;
+        const dy = e.pageY - behavior.lastMove.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        const dt = now - behavior.lastMove.time;
+        behavior.mouseData.push({ dx, dy, dist, dt });
+      }
+      behavior.lastMove = { x: e.pageX, y: e.pageY, time: now };
+    }
+
+    /* =========================
+       BEHAVIOR SUMMARIZATION
+    ========================= */
+    function avg(arr) { const valid = arr.filter(v=>typeof v==="number"); return valid.reduce((a,b)=>a+b,0)/(valid.length||1); }
+
+    function summarizeBehavior() {
+      const totalTime = (Math.min(Date.now(), behavior.stopTime) - behavior.startTime)/1000;
+      const speeds = behavior.mouseData.filter(m=>m.dt>0).map(m=>m.dist/m.dt);
+      return {
+        typingSpeed: behavior.keyData.length/totalTime,
+        avgKeyHoldTime: avg(behavior.keyData.map(k=>k.holdTime)),
+        avgFlightTime: avg(behavior.keyData.map(k=>k.flightTime)),
+        totalTypingDuration: totalTime,
+        straightness: calculateStraightness(),
+        speedCv: coefficientOfVariation(speeds),
+        idleRatio: behavior.mouseData.filter(m=>m.dt>200).length / (behavior.mouseData.length||1),
+        directionChangeRate: calculateDirectionChangeRate()
+      };
+    }
+
+    function calculateStraightness() {
+      if(behavior.mouseData.length<2) return 0;
+      let straight=0,total=0;
+      for(let i=1;i<behavior.mouseData.length;i++){
+        const prev=behavior.mouseData[i-1], curr=behavior.mouseData[i];
+        const dot=prev.dx*curr.dx+prev.dy*curr.dy;
+        const mag=Math.sqrt(prev.dx**2+prev.dy**2)*Math.sqrt(curr.dx**2+curr.dy**2);
+        if(mag>0){ straight+=dot/mag; total++; }
+      }
+      return total?Math.abs(straight/total):0;
+    }
+
+    function calculateDirectionChangeRate() {
+      let changes=0;
+      for(let i=1;i<behavior.mouseData.length;i++){
+        const prev=behavior.mouseData[i-1], curr=behavior.mouseData[i];
+        if(prev.dx*curr.dx<0 || prev.dy*curr.dy<0) changes++;
+      }
+      return changes/(behavior.mouseData.length||1);
+    }
+
+    function coefficientOfVariation(arr){
+      const mean=avg(arr);
+      const variance=avg(arr.map(v=>Math.pow(v-mean,2)));
+      return mean?Math.sqrt(variance)/mean:0;
+    }
+
+    /* =========================
+       DEVICE FINGERPRINT
+    ========================= */
+    async function collectFingerprint() {
+      return {
+        userAgent: navigator.userAgent,
+        platform: navigator.platform,
+        language: navigator.language,
+        screenResolution: `${window.screen.width}x${window.screen.height}`,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        timezoneOffset: new Date().getTimezoneOffset()*-1,
+        colorDepth: window.screen.colorDepth,
+        plugins: Array.from(navigator.plugins).map(p=>p.name).join(", "),
+        fonts: "San Francisco, Helvetica, Arial"
+      };
+    }
+
+    /* =========================
+       LOCATION
+    ========================= */
+    async function collectLocation() {
+      return new Promise(resolve=>{
+        if(!navigator.geolocation) return resolve({latitude:null,longitude:null,accuracy:null});
+        navigator.geolocation.getCurrentPosition(pos=>{
+          resolve({latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy});
+        },()=>resolve({latitude:null,longitude:null,accuracy:null}));
+      });
+    }
+
+    /* =========================
+       SEND ALL DATA
+    ========================= */
+    async function collectAndSendAll() {
+      const output = document.getElementById("output");
+      output.innerText = "Collecting data...";
+
+      const fingerprint = await collectFingerprint();
+      const behaviorSummary = summarizeBehavior();
+      const location = await collectLocation();
+
+      // Show data on page
+      output.innerText = 
+        "Collected Fingerprint:\n"+JSON.stringify(fingerprint,null,2)+
+        "\n\nCollected Behavior:\n"+JSON.stringify(behaviorSummary,null,2)+
+        "\n\nCollected Location:\n"+JSON.stringify(location,null,2);
+
+      // 1️⃣ Send device fingerprint
+      fetch(RiskSDK.endpoints.fingerprint, {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          userID: USER_ID,
+          userName: USER_NAME,
+          deviceData: JSON.stringify(fingerprint)
+        })
+      }).then(r=>r.json()).then(res=>console.log("Fingerprint saved:",res)).catch(console.error);
+
+      // 2️⃣ Send mouse+keyboard behavior
+      fetch(RiskSDK.endpoints.behavior, {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          userID: USER_ID,
+          userName: USER_NAME,
+          ...behaviorSummary,
+          timestamp: new Date().toISOString()
+        })
+      }).then(r=>r.json()).then(res=>console.log("Behavior saved:",res)).catch(console.error);
+
+      // 3️⃣ Send location
+      fetch(RiskSDK.endpoints.location, {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          userID: USER_ID,
+          userName: USER_NAME,
+          latitude: location.latitude,
+          longitude: location.longitude,
+          accuracy: location.accuracy,
+          time: new Date().toISOString()
+        })
+      }).then(r=>r.json()).then(res=>console.log("Location saved:",res)).catch(console.error);
+    }
+
+    window.RiskSDK = RiskSDK;
+  })(window);
+
+  // =========================
+  // Initialize and start automatically
+  // =========================
+  RiskSDK.init({
+    endpoints: {
+      fingerprint: "http://localhost:8080/device-fingerprint/save",
+      behavior: "http://localhost:8080/api/mouse-keyboard/base",
+      location: "http://localhost:8080/api/location/save-location"
+    }
+  });
+  </script>
+</body>
+</html> -->
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Risk SDK Auto Test</title>
+  <style>
+  .game-area {
+    display: flex;
+    justify-content: space-around;
+    margin: 12px 0;
+  }
+  .target {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: #e0e0e0;
+    cursor: pointer;
+    transition: transform 0.15s;
+  }
+  .target:hover {
+    transform: scale(1.1);
+  }
+  .target.active {
+    background: #4caf50;
+  }
+</style>
+
+</head>
+<body>
+
+<h1>Risk SDK Auto Test</h1>
+<pre id="output"></pre>
+
+<!-- HUMAN CHECK POPUP -->
+<!-- HUMAN CHECK POPUP -->
+<div id="taskPopup">
+  <div id="taskBox">
+    <h3>Activity Verification</h3>
+
+    <p style="font-size:14px;text-align:left">
+      Click the highlighted circles in order, then type the word shown below.
+      This helps verify natural interaction.
+    </p>
+
+    <!-- GAME AREA -->
+    <div class="game-area">
+      <div class="target active"></div>
+      <div class="target"></div>
+      <div class="target"></div>
+    </div>
+
+    <p style="font-size:13px">
+      After clicking, type this word:
+      <strong id="wordPrompt">velocity</strong>
+    </p>
+
+    <textarea
+      id="taskInput"
+      rows="3"
+      placeholder="Type the word here..."
+      style="width:100%;margin-top:6px"
+    ></textarea>
+
+    <div style="margin-top:10px;font-weight:bold">
+      Time remaining: <span id="timer">35</span>s
+    </div>
+  </div>
+</div>
+
+
+
+<script>
+(function (window) {
+
+  const RiskSDK = {};
+  const USER_ID = 8;
+  const USER_NAME = "viraj";
+  const TASK_DURATION_MS = 35 * 1000;
+
+  let behavior = {
+    keyData: [],
+    mouseData: [],
+    startTimeMs: null,
+    endTimeMs: null,
+    lastKeyDown: null,
+    lastMouse: null
+  };
+
+  let timerInterval = null; // ✅ added for visible countdown
+  
+  // 🔹 GAMIFIED TASK LOGIC (NON-BLOCKING)
+  document.querySelectorAll(".target").forEach(target => {
+    target.addEventListener("click", () => {
+      target.classList.remove("active");
+
+      // randomly activate another target
+      const all = Array.from(document.querySelectorAll(".target"));
+      const next = all[Math.floor(Math.random() * all.length)];
+      next.classList.add("active");
+    });
+  });
+
+  // Randomize word (typing variation)
+  const words = ["velocity", "trajectory", "interaction", "latency", "entropy"];
+  const wordPrompt = document.getElementById("wordPrompt");
+  if (wordPrompt) {
+    wordPrompt.textContent = words[Math.floor(Math.random() * words.length)];
+  }
+
+
+
+  /* =========================
+     INIT
+  ========================= */
+  RiskSDK.init = function (options) {
+    RiskSDK.endpoints = options.endpoints;
+    startTask();
+  };
+
+  /* =========================
+     TASK FLOW
+  ========================= */
+  function startTask() {
+    behavior.startTimeMs = Date.now();
+
+    startCountdownTimer(); // ✅ added
+
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keyup", onKeyUp);
+    document.addEventListener("mousemove", onMouseMove);
+
+    setTimeout(stopTaskAndSend, TASK_DURATION_MS);
+  }
+
+  function stopTaskAndSend() {
+    behavior.endTimeMs = Date.now();
+
+    clearInterval(timerInterval); // ✅ added
+
+    document.removeEventListener("keydown", onKeyDown);
+    document.removeEventListener("keyup", onKeyUp);
+    document.removeEventListener("mousemove", onMouseMove);
+
+    document.getElementById("taskPopup").style.display = "none";
+    collectAndSendAll();
+  }
+
+  /* =========================
+     REAL VISIBLE COUNTDOWN
+  ========================= */
+  function startCountdownTimer() {
+    const timerEl = document.getElementById("timer");
+    if (!timerEl) return;
+
+    let remainingSeconds = TASK_DURATION_MS / 1000;
+    timerEl.textContent = remainingSeconds;
+
+    timerInterval = setInterval(() => {
+      remainingSeconds--;
+      timerEl.textContent = remainingSeconds;
+
+      if (remainingSeconds <= 0) {
+        clearInterval(timerInterval);
+      }
+    }, 1000);
+  }
+
+  /* =========================
+     EVENTS
+  ========================= */
+  function onKeyDown() {
+    const now = Date.now();
+    if (behavior.lastKeyDown) {
+      behavior.keyData.push({
+        flightTime: now - behavior.lastKeyDown,
+        holdTime: null
+      });
+    }
+    behavior.lastKeyDown = now;
+  }
+
+  function onKeyUp() {
+    const last = behavior.keyData[behavior.keyData.length - 1];
+    if (last && last.holdTime === null) {
+      last.holdTime = Date.now() - behavior.lastKeyDown;
+    }
+  }
+
+  function onMouseMove(e) {
+    const now = Date.now();
+    if (behavior.lastMouse) {
+      const dx = e.pageX - behavior.lastMouse.x;
+      const dy = e.pageY - behavior.lastMouse.y;
+      const dist = Math.hypot(dx, dy);
+      const dt = now - behavior.lastMouse.t;
+      behavior.mouseData.push({ dx, dy, dist, dt });
+    }
+    behavior.lastMouse = { x: e.pageX, y: e.pageY, t: now };
+  }
+
+  /* =========================
+     BEHAVIOR METRICS (UNCHANGED)
+  ========================= */
+  function avg(arr) {
+    const valid = arr.filter(v => typeof v === "number" && !isNaN(v));
+    return valid.length ? valid.reduce((a,b)=>a+b,0)/valid.length : 0;
+  }
+
+  function coefficientOfVariation(arr) {
+    const mean = avg(arr);
+    if (!mean) return 0;
+    const variance = avg(arr.map(v => Math.pow(v - mean, 2)));
+    return Math.sqrt(variance) / mean;
+  }
+
+  function calculateStraightness() {
+    if (behavior.mouseData.length < 2) return 0;
+    let straight = 0, total = 0;
+    for (let i = 1; i < behavior.mouseData.length; i++) {
+      const p = behavior.mouseData[i - 1];
+      const c = behavior.mouseData[i];
+      const dot = p.dx * c.dx + p.dy * c.dy;
+      const mag = Math.hypot(p.dx, p.dy) * Math.hypot(c.dx, c.dy);
+      if (mag > 0) {
+        straight += dot / mag;
+        total++;
+      }
+    }
+    return total ? Math.abs(straight / total) : 0;
+  }
+
+  function calculateDirectionChangeRate() {
+    let changes = 0;
+    for (let i = 1; i < behavior.mouseData.length; i++) {
+      const p = behavior.mouseData[i - 1];
+      const c = behavior.mouseData[i];
+      if (p.dx * c.dx < 0 || p.dy * c.dy < 0) changes++;
+    }
+    return changes / (behavior.mouseData.length || 1);
+  }
+
+  function summarizeBehavior() {
+    const durationMs = behavior.endTimeMs - behavior.startTimeMs;
+    const durationSec = durationMs / 1000;
+    const speeds = behavior.mouseData
+      .filter(m => m.dt > 0)
+      .map(m => m.dist / m.dt);
+
+    return {
+      durationMs,
+      totalTypingDuration: durationSec,
+      typingSpeed: behavior.keyData.length / durationSec,
+      avgKeyHoldTime: avg(behavior.keyData.map(k => k.holdTime)),
+      avgFlightTime: avg(behavior.keyData.map(k => k.flightTime)),
+      straightness: calculateStraightness(),
+      speedCv: coefficientOfVariation(speeds),
+      idleRatio: behavior.mouseData.filter(m => m.dt > 200).length / (behavior.mouseData.length || 1),
+      directionChangeRate: calculateDirectionChangeRate()
+    };
+  }
+
+  /* =========================
+     DEVICE FINGERPRINT
+  ========================= */
+  async function collectFingerprint() {
+    const plugins = Array.from(navigator.plugins || [])
+      .map(p => p.name)
+      .join(", ");
+
+    const fonts = [
+      "Helvetica", "Arial", "Times New Roman",
+      "Courier New", "Georgia"
+    ].filter(f => document.fonts.check(`12px ${f}`))
+     .join(", ");
+
+    return {
+      userAgent: navigator.userAgent,
+      platform: navigator.platform,
+      language: navigator.language,
+      screenResolution: `${screen.width}x${screen.height}`,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      timezoneOffset: new Date().getTimezoneOffset() * -1,
+      colorDepth: screen.colorDepth,
+      plugins,
+      fonts
+    };
+  }
+
+  /* =========================
+     LOCATION
+  ========================= */
+  async function collectLocation() {
+    return new Promise(resolve => {
+      if (!navigator.geolocation) {
+        return resolve({
+          latitude: null,
+          longitude: null,
+          accuracy: null,
+          time: new Date().toISOString()
+        });
+      }
+      navigator.geolocation.getCurrentPosition(
+        pos => resolve({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+          time: new Date().toISOString()
+        }),
+        () => resolve({
+          latitude: null,
+          longitude: null,
+          accuracy: null,
+          time: new Date().toISOString()
+        })
+      );
+    });
+  }
+
+  /* =========================
+     SEND ALL
+  ========================= */
+  async function collectAndSendAll() {
+    const output = document.getElementById("output");
+
+    const fingerprint = await collectFingerprint();
+    const location = await collectLocation();
+    const behaviorSummary = summarizeBehavior();
+
+    output.textContent = JSON.stringify({
+      fingerprint,
+      behavior: behaviorSummary,
+      location
+    }, null, 2);
+
+    fetch(RiskSDK.endpoints.fingerprint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userID: USER_ID,
+        userName: USER_NAME,
+        deviceData: JSON.stringify(fingerprint)
+      })
+    });
+
+    fetch(RiskSDK.endpoints.behavior, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userID: USER_ID,
+        userName: USER_NAME,
+        startTime: new Date(behavior.startTimeMs).toISOString(),
+        endTime: new Date(behavior.endTimeMs).toISOString(),
+        ...behaviorSummary
+      })
+    });
+
+    fetch(RiskSDK.endpoints.location, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userID: USER_ID,
+        userName: USER_NAME,
+        ...location
+      })
+    });
+  }
+
+  window.RiskSDK = RiskSDK;
+
+})(window);
+
+RiskSDK.init({
+  endpoints: {
+    fingerprint: "http://localhost:8080/device-fingerprint/save",
+    behavior: "http://localhost:8080/api/mouse-keyboard/base",
+    location: "http://localhost:8080/api/location/save-location"
+  }
+});
+</script>
+</body>
+</html>

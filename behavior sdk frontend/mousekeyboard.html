@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Behavior Data Collection</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    #consent { margin-bottom: 20px; }
+    textarea { width: 100%; height: 80px; }
+  </style>
+</head>
+<body>
+  <h2>User Behavior Data Collection</h2>
+  
+  <div id="consent">
+    <p>
+      We collect typing speed, key timing, and mouse movement patterns 
+      for research/security purposes. Your typed text content is NOT stored.  
+      Please check the box to give consent before continuing.
+    </p>
+    <label><input type="checkbox" id="agree"> I consent</label><br><br>
+    <button onclick="startTest()">Start</button>
+  </div>
+  
+  <div id="test" style="display:none;">
+    <p>Please type this sentence naturally:</p>
+    <blockquote><b>The quick brown fox jumps over the lazy dog</b></blockquote>
+    <textarea id="typingBox" placeholder="Start typing here..."></textarea>
+    <br><br>
+    <button onclick="finishTest()">Finish</button>
+  </div>
+  
+  <pre id="output"></pre>
+
+  <script>
+    let keyData = [];
+    let mouseData = [];
+    let startTime, endTime;
+    let lastKeyTime = null;
+
+    function startTest() {
+      if(!document.getElementById("agree").checked){
+        alert("Please provide consent first.");
+        return;
+      }
+      document.getElementById("consent").style.display = "none";
+      document.getElementById("test").style.display = "block";
+      startTime = Date.now();
+
+      // Capture keystrokes
+      const typingBox = document.getElementById("typingBox");
+      typingBox.addEventListener("keydown", e => {
+        let now = Date.now();
+        if(lastKeyTime){
+          keyData.push({
+            key: e.key,
+            holdTime: null,   // will update on keyup
+            flightTime: now - lastKeyTime
+          });
+        }
+        lastKeyTime = now;
+        keyData[keyData.length - 1]?.key === e.key;
+      });
+
+      typingBox.addEventListener("keyup", e => {
+        let now = Date.now();
+        let last = keyData[keyData.length - 1];
+        if(last && last.key === e.key && last.holdTime === null){
+          last.holdTime = now - lastKeyTime;
+        }
+      });
+
+      // Capture mouse movement
+      let lastMove = null;
+      document.addEventListener("mousemove", e => {
+        let now = Date.now();
+        if(lastMove){
+          let dx = e.pageX - lastMove.x;
+          let dy = e.pageY - lastMove.y;
+          let dist = Math.sqrt(dx*dx + dy*dy);
+          let dt = now - lastMove.time;
+          let speed = dist / dt;
+          mouseData.push({
+            dx, dy, dist, dt, speed
+          });
+        }
+        lastMove = {x: e.pageX, y: e.pageY, time: now};
+      });
+    }
+
+    function finishTest() {
+      endTime = Date.now();
+      let totalDuration = (endTime - startTime) / 1000;
+
+      // Keystroke features
+      let typingSpeed = keyData.length / totalDuration; // keys per sec
+      let avgHold = keyData.filter(k => k.holdTime).reduce((a,b)=>a+b.holdTime,0)/keyData.length;
+      let avgFlight = keyData.filter(k => k.flightTime).reduce((a,b)=>a+b.flightTime,0)/keyData.length;
+
+      // Mouse features (simplified)
+      let totalDist = mouseData.reduce((a,b)=>a+b.dist,0);
+      let avgSpeed = mouseData.reduce((a,b)=>a+b.speed,0)/mouseData.length;
+      let directionChanges = mouseData.filter((m,i)=> i>0 && Math.sign(m.dx) !== Math.sign(mouseData[i-1].dx)).length;
+      let idleTime = mouseData.filter(m => m.dt > 200).length;
+      let idleRatio = idleTime / mouseData.length;
+
+      let results = {
+  typingSpeed: typingSpeed,
+  avgKeyHoldTime: avgHold,
+  avgFlightTime: avgFlight,
+  totalTypingDuration: totalDuration,
+  straightness: (totalDist > 0)
+    ? (Math.sqrt(Math.pow(mouseData[mouseData.length - 1].dx, 2) + Math.pow(mouseData[mouseData.length - 1].dy, 2)) / totalDist)
+    : 0,
+  speedCv: avgSpeed / (typingSpeed || 1),
+  idleRatio: idleRatio,
+  directionChangeRate: directionChanges / totalDuration
+};
+
+
+      document.getElementById("output").textContent = JSON.stringify(results, null, 2);
+    }
+  </script>
+</body>
+</html>
