@@ -172,7 +172,7 @@ public ResponseEntity<?> compareLocation(@PathVariable Long userID) {
     }
 
     // Return Flask response to frontend
-    return ResponseEntity.ok(flaskResponse.getBody());
+    return ResponseEntity.ok(result);
 }
 
 
